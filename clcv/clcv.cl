@@ -13,6 +13,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+// TODO: Experiment with floats and different GPUs
+// On some devices (mostly old?) float mul are faster than int mul
+// Some experiments should therefore been made with using float instead of ints.
+// e.g. using mad on float should be consistently efficient, whereas with ints,
+// you have to either use mad24 or regular mad to get the best performance
+// (depending on the chipset).
+
+
 // Copy a sub image into a local memory buffer
 void memcpy2d2local(local int * local_out, global const int * in,
                     const int in_nrows, const int in_ncols,
@@ -87,6 +95,105 @@ kernel void binarize(global const int * in, global int * out,
   const int y = get_global_id(1);
   const int idx = mad24(y, ncols, x);
   out[idx] = select(min_val, max_val, in[idx] >= threshold);  
+}
+
+// This binarize version compacts the binarized image to a 1bit per pixel format
+// Because of coalescing, and to lessen the constraints on the image size
+// rounding, we interpret the image as a 1D data input.
+// We don't use reduction here : one thread is responsible for 32 consecutive
+// pixels. Therefore (nrows*ncols) needs to be a multiple of 32*64=2048 for
+// a reasonable occupancy and to prevent extra checks.
+// Be careful though, that's already 8KB of shared memory usage...
+// TODO: do real benchmarking about occupancy vs. memory usage tradeoff.
+kernel void bitmappedbinarize(global const int * in, global int * out,
+                              const int threshold, const int min_val, const int max_val,
+                              local int * local_img)
+{
+  const int thread_idx = get_local_id(0);
+  const int nb_threads = get_local_size(0);
+  const int idx = get_global_id(0) << 5; // global size is image_size/32
+  const int gidx = (get_group_id(0) << 5) * nb_threads; // * 32 * nb_threads
+
+  memcpy2local(local_img, in + gidx, nb_threads << 5, thread_idx, nb_threads);
+  { // Unroll
+    const int lidx = thread_idx << 5;
+    out[get_global_id(0)] =
+      select(min_val, max_val, local_img[lidx + 0] >= threshold) << 31
+      | select(min_val, max_val, local_img[lidx + 1] >= threshold) << 30
+      | select(min_val, max_val, local_img[lidx + 2] >= threshold) << 29
+      | select(min_val, max_val, local_img[lidx + 3] >= threshold) << 28
+      | select(min_val, max_val, local_img[lidx + 4] >= threshold) << 27
+      | select(min_val, max_val, local_img[lidx + 5] >= threshold) << 26
+      | select(min_val, max_val, local_img[lidx + 6] >= threshold) << 25
+      | select(min_val, max_val, local_img[lidx + 7] >= threshold) << 24
+      | select(min_val, max_val, local_img[lidx + 8] >= threshold) << 23
+      | select(min_val, max_val, local_img[lidx + 9] >= threshold) << 22
+      | select(min_val, max_val, local_img[lidx + 10] >= threshold) << 21
+      | select(min_val, max_val, local_img[lidx + 11] >= threshold) << 20
+      | select(min_val, max_val, local_img[lidx + 12] >= threshold) << 19
+      | select(min_val, max_val, local_img[lidx + 13] >= threshold) << 18
+      | select(min_val, max_val, local_img[lidx + 14] >= threshold) << 17
+      | select(min_val, max_val, local_img[lidx + 15] >= threshold) << 16
+      | select(min_val, max_val, local_img[lidx + 16] >= threshold) << 15
+      | select(min_val, max_val, local_img[lidx + 17] >= threshold) << 14
+      | select(min_val, max_val, local_img[lidx + 18] >= threshold) << 13
+      | select(min_val, max_val, local_img[lidx + 19] >= threshold) << 12
+      | select(min_val, max_val, local_img[lidx + 20] >= threshold) << 11
+      | select(min_val, max_val, local_img[lidx + 21] >= threshold) << 10
+      | select(min_val, max_val, local_img[lidx + 22] >= threshold) << 9
+      | select(min_val, max_val, local_img[lidx + 23] >= threshold) << 8
+      | select(min_val, max_val, local_img[lidx + 24] >= threshold) << 7
+      | select(min_val, max_val, local_img[lidx + 25] >= threshold) << 6
+      | select(min_val, max_val, local_img[lidx + 26] >= threshold) << 5
+      | select(min_val, max_val, local_img[lidx + 27] >= threshold) << 4
+      | select(min_val, max_val, local_img[lidx + 28] >= threshold) << 3
+      | select(min_val, max_val, local_img[lidx + 29] >= threshold) << 2
+      | select(min_val, max_val, local_img[lidx + 30] >= threshold) << 1
+      | select(min_val, max_val, local_img[lidx + 31] >= threshold) << 0;
+  }
+
+}
+
+// Convert a bitmap image to its unbitmap version (one pixel/32bit)
+kernel void unbitmap(global const int * in, global int * out)
+{
+  const int idx = get_global_id(0);
+  const int oidx = idx << 5;
+  
+  { // Unroll
+    out[oidx + 0] = (in[idx] >> 31) & 1;
+    out[oidx + 1] = (in[idx] >> 30) & 1;
+    out[oidx + 2] = (in[idx] >> 29) & 1;
+    out[oidx + 3] = (in[idx] >> 28) & 1;
+    out[oidx + 4] = (in[idx] >> 27) & 1;
+    out[oidx + 5] = (in[idx] >> 26) & 1;
+    out[oidx + 6] = (in[idx] >> 25) & 1;
+    out[oidx + 7] = (in[idx] >> 24) & 1;
+    out[oidx + 8] = (in[idx] >> 23) & 1;
+    out[oidx + 9] = (in[idx] >> 22) & 1;
+    out[oidx + 10] = (in[idx] >> 21) & 1;
+    out[oidx + 11] = (in[idx] >> 20) & 1;
+    out[oidx + 12] = (in[idx] >> 19) & 1;
+    out[oidx + 13] = (in[idx] >> 18) & 1;
+    out[oidx + 14] = (in[idx] >> 17) & 1;
+    out[oidx + 15] = (in[idx] >> 16) & 1;
+    out[oidx + 16] = (in[idx] >> 15) & 1;
+    out[oidx + 17] = (in[idx] >> 14) & 1;
+    out[oidx + 18] = (in[idx] >> 13) & 1;
+    out[oidx + 19] = (in[idx] >> 12) & 1;
+    out[oidx + 20] = (in[idx] >> 11) & 1;
+    out[oidx + 21] = (in[idx] >> 10) & 1;
+    out[oidx + 22] = (in[idx] >> 9) & 1;
+    out[oidx + 23] = (in[idx] >> 8) & 1;
+    out[oidx + 24] = (in[idx] >> 7) & 1;
+    out[oidx + 25] = (in[idx] >> 6) & 1;
+    out[oidx + 26] = (in[idx] >> 5) & 1;
+    out[oidx + 27] = (in[idx] >> 4) & 1;
+    out[oidx + 28] = (in[idx] >> 3) & 1;
+    out[oidx + 29] = (in[idx] >> 2) & 1;
+    out[oidx + 30] = (in[idx] >> 1) & 1;
+    out[oidx + 31] = (in[idx] >> 0) & 1;
+  }
 }
 
 // Naive mathematical morpholgy operator.

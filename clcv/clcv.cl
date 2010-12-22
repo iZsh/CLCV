@@ -111,13 +111,49 @@ kernel void bitmappedbinarize(global const int * in, global int * out,
 {
   const int thread_idx = get_local_id(0);
   const int nb_threads = get_local_size(0);
-  const int idx = get_global_id(0) << 5; // global size is image_size/32
-  const int gidx = (get_group_id(0) << 5) * nb_threads; // * 32 * nb_threads
 
-  memcpy2local(local_img, in + gidx, nb_threads << 5, thread_idx, nb_threads);
+  // memcpy2local but unrolled. 2x faster on Nvidia 9400M
+  { // unroll
+    const int gidx = (get_group_id(0) << 5) * nb_threads + thread_idx;
+    local_img[thread_idx + 0*nb_threads] = in[gidx + 0*nb_threads];
+    local_img[thread_idx + 1*nb_threads] = in[gidx + 1*nb_threads];
+    local_img[thread_idx + 2*nb_threads] = in[gidx + 2*nb_threads];
+    local_img[thread_idx + 3*nb_threads] = in[gidx + 3*nb_threads];
+    local_img[thread_idx + 4*nb_threads] = in[gidx + 4*nb_threads];
+    local_img[thread_idx + 5*nb_threads] = in[gidx + 5*nb_threads];
+    local_img[thread_idx + 6*nb_threads] = in[gidx + 6*nb_threads];
+    local_img[thread_idx + 7*nb_threads] = in[gidx + 7*nb_threads];
+    local_img[thread_idx + 8*nb_threads] = in[gidx + 8*nb_threads];
+    local_img[thread_idx + 9*nb_threads] = in[gidx + 9*nb_threads];
+    local_img[thread_idx + 10*nb_threads] = in[gidx + 10*nb_threads];
+    local_img[thread_idx + 11*nb_threads] = in[gidx + 11*nb_threads];
+    local_img[thread_idx + 12*nb_threads] = in[gidx + 12*nb_threads];
+    local_img[thread_idx + 13*nb_threads] = in[gidx + 13*nb_threads];
+    local_img[thread_idx + 14*nb_threads] = in[gidx + 14*nb_threads];
+    local_img[thread_idx + 15*nb_threads] = in[gidx + 15*nb_threads];
+    local_img[thread_idx + 16*nb_threads] = in[gidx + 16*nb_threads];
+    local_img[thread_idx + 17*nb_threads] = in[gidx + 17*nb_threads];
+    local_img[thread_idx + 18*nb_threads] = in[gidx + 18*nb_threads];
+    local_img[thread_idx + 19*nb_threads] = in[gidx + 19*nb_threads];
+    local_img[thread_idx + 20*nb_threads] = in[gidx + 20*nb_threads];
+    local_img[thread_idx + 21*nb_threads] = in[gidx + 21*nb_threads];
+    local_img[thread_idx + 22*nb_threads] = in[gidx + 22*nb_threads];
+    local_img[thread_idx + 23*nb_threads] = in[gidx + 23*nb_threads];
+    local_img[thread_idx + 24*nb_threads] = in[gidx + 24*nb_threads];
+    local_img[thread_idx + 25*nb_threads] = in[gidx + 25*nb_threads];
+    local_img[thread_idx + 26*nb_threads] = in[gidx + 26*nb_threads];
+    local_img[thread_idx + 27*nb_threads] = in[gidx + 27*nb_threads];
+    local_img[thread_idx + 28*nb_threads] = in[gidx + 28*nb_threads];
+    local_img[thread_idx + 29*nb_threads] = in[gidx + 29*nb_threads];
+    local_img[thread_idx + 30*nb_threads] = in[gidx + 30*nb_threads];
+    local_img[thread_idx + 31*nb_threads] = in[gidx + 31*nb_threads];
+  }
+
+  // Compute the result
   { // Unroll
+    const int idx = get_global_id(0);
     const int lidx = thread_idx << 5;
-    out[get_global_id(0)] =
+    out[idx] =
       select(min_val, max_val, local_img[lidx + 0] >= threshold) << 31
       | select(min_val, max_val, local_img[lidx + 1] >= threshold) << 30
       | select(min_val, max_val, local_img[lidx + 2] >= threshold) << 29
@@ -151,49 +187,90 @@ kernel void bitmappedbinarize(global const int * in, global int * out,
       | select(min_val, max_val, local_img[lidx + 30] >= threshold) << 1
       | select(min_val, max_val, local_img[lidx + 31] >= threshold) << 0;
   }
-
 }
 
 // Convert a bitmap image to its unbitmap version (one pixel/32bit)
-kernel void unbitmap(global const int * in, global int * out)
+kernel void unbitmap(global const int * in, global int * out, local int * local_img)
 {
-  const int idx = get_global_id(0);
-  const int oidx = idx << 5;
-  
+  const int thread_idx = get_local_id(0);
+  const int nb_threads = get_local_size(0);
+
+  // unbitmap to local memory because of coalescing when writing
+  // the result back to the output memory.
   { // Unroll
-    out[oidx + 0] = (in[idx] >> 31) & 1;
-    out[oidx + 1] = (in[idx] >> 30) & 1;
-    out[oidx + 2] = (in[idx] >> 29) & 1;
-    out[oidx + 3] = (in[idx] >> 28) & 1;
-    out[oidx + 4] = (in[idx] >> 27) & 1;
-    out[oidx + 5] = (in[idx] >> 26) & 1;
-    out[oidx + 6] = (in[idx] >> 25) & 1;
-    out[oidx + 7] = (in[idx] >> 24) & 1;
-    out[oidx + 8] = (in[idx] >> 23) & 1;
-    out[oidx + 9] = (in[idx] >> 22) & 1;
-    out[oidx + 10] = (in[idx] >> 21) & 1;
-    out[oidx + 11] = (in[idx] >> 20) & 1;
-    out[oidx + 12] = (in[idx] >> 19) & 1;
-    out[oidx + 13] = (in[idx] >> 18) & 1;
-    out[oidx + 14] = (in[idx] >> 17) & 1;
-    out[oidx + 15] = (in[idx] >> 16) & 1;
-    out[oidx + 16] = (in[idx] >> 15) & 1;
-    out[oidx + 17] = (in[idx] >> 14) & 1;
-    out[oidx + 18] = (in[idx] >> 13) & 1;
-    out[oidx + 19] = (in[idx] >> 12) & 1;
-    out[oidx + 20] = (in[idx] >> 11) & 1;
-    out[oidx + 21] = (in[idx] >> 10) & 1;
-    out[oidx + 22] = (in[idx] >> 9) & 1;
-    out[oidx + 23] = (in[idx] >> 8) & 1;
-    out[oidx + 24] = (in[idx] >> 7) & 1;
-    out[oidx + 25] = (in[idx] >> 6) & 1;
-    out[oidx + 26] = (in[idx] >> 5) & 1;
-    out[oidx + 27] = (in[idx] >> 4) & 1;
-    out[oidx + 28] = (in[idx] >> 3) & 1;
-    out[oidx + 29] = (in[idx] >> 2) & 1;
-    out[oidx + 30] = (in[idx] >> 1) & 1;
-    out[oidx + 31] = (in[idx] >> 0) & 1;
+    const int idx = get_global_id(0);
+    const int oidx = thread_idx << 5;
+    local_img[oidx + 0] = (in[idx] >> 31) & 1;
+    local_img[oidx + 1] = (in[idx] >> 30) & 1;
+    local_img[oidx + 2] = (in[idx] >> 29) & 1;
+    local_img[oidx + 3] = (in[idx] >> 28) & 1;
+    local_img[oidx + 4] = (in[idx] >> 27) & 1;
+    local_img[oidx + 5] = (in[idx] >> 26) & 1;
+    local_img[oidx + 6] = (in[idx] >> 25) & 1;
+    local_img[oidx + 7] = (in[idx] >> 24) & 1;
+    local_img[oidx + 8] = (in[idx] >> 23) & 1;
+    local_img[oidx + 9] = (in[idx] >> 22) & 1;
+    local_img[oidx + 10] = (in[idx] >> 21) & 1;
+    local_img[oidx + 11] = (in[idx] >> 20) & 1;
+    local_img[oidx + 12] = (in[idx] >> 19) & 1;
+    local_img[oidx + 13] = (in[idx] >> 18) & 1;
+    local_img[oidx + 14] = (in[idx] >> 17) & 1;
+    local_img[oidx + 15] = (in[idx] >> 16) & 1;
+    local_img[oidx + 16] = (in[idx] >> 15) & 1;
+    local_img[oidx + 17] = (in[idx] >> 14) & 1;
+    local_img[oidx + 18] = (in[idx] >> 13) & 1;
+    local_img[oidx + 19] = (in[idx] >> 12) & 1;
+    local_img[oidx + 20] = (in[idx] >> 11) & 1;
+    local_img[oidx + 21] = (in[idx] >> 10) & 1;
+    local_img[oidx + 22] = (in[idx] >> 9) & 1;
+    local_img[oidx + 23] = (in[idx] >> 8) & 1;
+    local_img[oidx + 24] = (in[idx] >> 7) & 1;
+    local_img[oidx + 25] = (in[idx] >> 6) & 1;
+    local_img[oidx + 26] = (in[idx] >> 5) & 1;
+    local_img[oidx + 27] = (in[idx] >> 4) & 1;
+    local_img[oidx + 28] = (in[idx] >> 3) & 1;
+    local_img[oidx + 29] = (in[idx] >> 2) & 1;
+    local_img[oidx + 30] = (in[idx] >> 1) & 1;
+    local_img[oidx + 31] = (in[idx] >> 0) & 1;
   }
+  
+  // Write the result back
+  { // unroll
+    const int gidx = (get_group_id(0) << 5) * nb_threads + thread_idx;
+    out[gidx + 0*nb_threads] = local_img[thread_idx + 0*nb_threads];
+    out[gidx + 1*nb_threads] = local_img[thread_idx + 1*nb_threads];
+    out[gidx + 2*nb_threads] = local_img[thread_idx + 2*nb_threads];
+    out[gidx + 3*nb_threads] = local_img[thread_idx + 3*nb_threads];
+    out[gidx + 4*nb_threads] = local_img[thread_idx + 4*nb_threads];
+    out[gidx + 5*nb_threads] = local_img[thread_idx + 5*nb_threads];
+    out[gidx + 6*nb_threads] = local_img[thread_idx + 6*nb_threads];
+    out[gidx + 7*nb_threads] = local_img[thread_idx + 7*nb_threads];
+    out[gidx + 8*nb_threads] = local_img[thread_idx + 8*nb_threads];
+    out[gidx + 9*nb_threads] = local_img[thread_idx + 9*nb_threads];
+    out[gidx + 10*nb_threads] = local_img[thread_idx + 10*nb_threads];
+    out[gidx + 11*nb_threads] = local_img[thread_idx + 11*nb_threads];
+    out[gidx + 12*nb_threads] = local_img[thread_idx + 12*nb_threads];
+    out[gidx + 13*nb_threads] = local_img[thread_idx + 13*nb_threads];
+    out[gidx + 14*nb_threads] = local_img[thread_idx + 14*nb_threads];
+    out[gidx + 15*nb_threads] = local_img[thread_idx + 15*nb_threads];
+    out[gidx + 16*nb_threads] = local_img[thread_idx + 16*nb_threads];
+    out[gidx + 17*nb_threads] = local_img[thread_idx + 17*nb_threads];
+    out[gidx + 18*nb_threads] = local_img[thread_idx + 18*nb_threads];
+    out[gidx + 19*nb_threads] = local_img[thread_idx + 19*nb_threads];
+    out[gidx + 20*nb_threads] = local_img[thread_idx + 20*nb_threads];
+    out[gidx + 21*nb_threads] = local_img[thread_idx + 21*nb_threads];
+    out[gidx + 22*nb_threads] = local_img[thread_idx + 22*nb_threads];
+    out[gidx + 23*nb_threads] = local_img[thread_idx + 23*nb_threads];
+    out[gidx + 24*nb_threads] = local_img[thread_idx + 24*nb_threads];
+    out[gidx + 25*nb_threads] = local_img[thread_idx + 25*nb_threads];
+    out[gidx + 26*nb_threads] = local_img[thread_idx + 26*nb_threads];
+    out[gidx + 27*nb_threads] = local_img[thread_idx + 27*nb_threads];
+    out[gidx + 28*nb_threads] = local_img[thread_idx + 28*nb_threads];
+    out[gidx + 29*nb_threads] = local_img[thread_idx + 29*nb_threads];
+    out[gidx + 30*nb_threads] = local_img[thread_idx + 30*nb_threads];
+    out[gidx + 31*nb_threads] = local_img[thread_idx + 31*nb_threads];
+  }
+
 }
 
 // Naive mathematical morpholgy operator.

@@ -339,9 +339,13 @@ namespace clcv
   cl::Kernel CLCV<T>::create_unbitmap(const cl::Buffer & image_in, const cl::Buffer & image_out,
                                       const cl_int nrows, const cl_int ncols)
   {
+    const int nb_threads = get_device_type() == CL_DEVICE_TYPE_CPU ? 1 : 64;
+    assert((nrows*ncols) % (32*nb_threads) == 0);
+
     cl::Kernel kernel(m_program, "unbitmap");
     kernel.setArg(0, image_in);
     kernel.setArg(1, image_out);
+    kernel.setArg(2, 32 * nb_threads * sizeof (cl_int), NULL);
     return kernel;    
   }
   

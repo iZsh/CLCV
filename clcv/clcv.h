@@ -41,10 +41,15 @@ namespace clcv
     cl::CommandQueue & get_queue();
     void flush();
     void finish();
-    
+    void set_global_work_size(const cl::NDRange & global_work_size);
+    void set_local_work_size(const cl::NDRange & local_work_size);
+    const cl::NDRange & get_global_work_size() const;
+    const cl::NDRange & get_local_work_size() const;
+
     // Image related
     clcv_image_id open(const image2d<T> & img);
-    cl::Event read();
+    cl::Event fetch(const size_t size);
+    cl::Event fetch();
     image2d<T> save(clcv_image_id image_id);
     void close(clcv_image_id image_id);
     unsigned get_nrows();
@@ -57,15 +62,24 @@ namespace clcv
     void unload_se(clcv_se_id se_id);
 
     // Kernel related
+
+    cl::Kernel create_unbitmap(const cl::Buffer & image_in, const cl::Buffer & image_out,
+                               const cl_int nrows, const cl_int ncols);
     
+    cl::Event push_unbitmap();
+
     // Binarization
     cl::Kernel create_binarize(const cl::Buffer & image_in, const cl::Buffer & image_out,
                                const cl_int nrows, const cl_int ncols,
                                const cl_int threshold, const cl_int min, const cl_int max);
-    cl::Event push_binarize(const cl_int threshold, const cl_int min, const cl_int max,
-                            const cl::NDRange * local_work_size = NULL,
-                            const cl::NDRange * global_work_size = NULL);
-
+    cl::Event push_binarize(const cl_int threshold, const cl_int min, const cl_int max);
+    
+    // Bitmapped binarization
+    cl::Kernel create_bitmappedbinarize(const cl::Buffer & image_in, const cl::Buffer & image_out,
+                               const cl_int nrows, const cl_int ncols,
+                               const cl_int threshold, const bool inverted = false);
+    cl::Event push_bitmappedbinarize(const cl_int threshold, const bool inverted = false);
+    
     // Naive morpho implementations:
     // - One pixel per T
     // - Iterate through the SE for each pixel
@@ -73,29 +87,19 @@ namespace clcv
                                  const cl_int nrows, const cl_int ncols,
                                  const clcv_se_id se_id, const cl_int se_targetsum,
                                  const cl::NDRange & local_work_size);
-    cl::Event push_naivemorph(const clcv_se_id se_id, const cl_int se_targetsum,
-                              const cl::NDRange & local_work_size,
-                              const cl::NDRange * global_work_size = NULL);
+    cl::Event push_naivemorph(const clcv_se_id se_id, const cl_int se_targetsum);
     cl::Kernel create_naivedilation(const cl::Buffer & image_in, const cl::Buffer & image_out,
                                     const cl_int nrows, const cl_int ncols,
                                     const clcv_se_id se_id,
                                     const cl::NDRange & local_work_size);
-    cl::Event push_naivedilation(const clcv_se_id se_id,
-                                  const cl::NDRange & local_work_size,
-                                  const cl::NDRange * global_work_size = NULL);
+    cl::Event push_naivedilation(const clcv_se_id se_id);
     cl::Kernel create_naiveerosion(const cl::Buffer & image_in, const cl::Buffer & image_out,
                                    const cl_int nrows, const cl_int ncols,
                                    const clcv_se_id se_id,
                                    const cl::NDRange & local_work_size);
-    cl::Event push_naiveerosion(const clcv_se_id se_id,
-                                const cl::NDRange & local_work_size,
-                                const cl::NDRange * global_work_size = NULL);
-    cl::Event push_naiveopening(const clcv_se_id se_id,
-                                 const cl::NDRange & local_work_size,
-                                 const cl::NDRange * global_work_size = NULL);
-    cl::Event push_naiveclosing(const clcv_se_id se_id,
-                                const cl::NDRange & local_work_size,
-                                const cl::NDRange * global_work_size = NULL);
+    cl::Event push_naiveerosion(const clcv_se_id se_id);
+    cl::Event push_naiveopening(const clcv_se_id se_id);
+    cl::Event push_naiveclosing(const clcv_se_id se_id);
 
   private: struct clcv_image;
   private: struct clcv_se;
@@ -122,6 +126,9 @@ namespace clcv
     cl::Context m_context;
     cl::CommandQueue m_queue;
     cl::Program m_program;
+    
+    cl::NDRange m_global_work_size;
+    cl::NDRange m_local_work_size;    
 
     typedef std::map<unsigned, clcv_bufferpair> clcv_bufferpairmap;
     clcv_bufferpairmap m_bufferpairs;

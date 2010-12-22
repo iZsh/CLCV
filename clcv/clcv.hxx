@@ -28,7 +28,9 @@ namespace clcv
   template<typename T>
   inline
   CLCV<T>::CLCV(cl_device_type device_type)
-  : m_device_id(0), m_context(), m_queue(), m_program(), m_bufferpairs(),
+  : m_device_id(0), m_context(), m_queue(), m_program(),
+  m_global_work_size(cl::NullRange), m_local_work_size(cl::NullRange),
+  m_bufferpairs(),
   m_images(), m_next_image_id(1), m_current_image_id(0), m_ses(), m_next_se_id(0)
   {
     m_device_id = get_device_fallback(device_type);
@@ -36,7 +38,7 @@ namespace clcv
     m_queue = get_command_queue(m_context);
     m_program = load_program(m_context, "clcv/clcv.cl");
   }
-  
+
   template<typename T>
   inline
   CLCV<T>::~CLCV()
@@ -94,6 +96,35 @@ namespace clcv
   
   template<typename T>
   inline
+  void CLCV<T>::set_global_work_size(const cl::NDRange & global_work_size)
+  {
+    m_global_work_size = global_work_size;
+  }
+  
+  template<typename T>
+  inline
+  void CLCV<T>::set_local_work_size(const cl::NDRange & local_work_size)
+  {
+    const cl::NDRange unit_range(1,1);
+    m_local_work_size = get_device_type() == CL_DEVICE_TYPE_CPU ? unit_range : local_work_size;
+  }
+  
+  template<typename T>
+  inline
+  const cl::NDRange & CLCV<T>::get_global_work_size() const
+  {
+    return m_global_work_size;
+  }
+  
+  template<typename T>
+  inline
+  const cl::NDRange & CLCV<T>::get_local_work_size() const
+  {
+    return m_local_work_size;
+  }
+  
+  template<typename T>
+  inline
   typename CLCV<T>::clcv_bufferpair CLCV<T>::get_bufferpair(unsigned size)
   {
     clcv_bufferpairmap::iterator it = m_bufferpairs.find(size);
@@ -143,7 +174,15 @@ namespace clcv
 
   template<typename T>
   inline
-  cl::Event CLCV<T>::read()
+  cl::Event CLCV<T>::fetch(const size_t size)
+  {
+    clcv_image & img = get_image();
+    return read_mem(m_queue, img.data, get_in_buffer(), size);    
+  }
+
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::fetch()
   {
     clcv_image & img = get_image();
     return read_mem(m_queue, img.data, get_in_buffer(),
@@ -294,6 +333,42 @@ namespace clcv
   {
     swap_buffers(m_current_image_id);
   }
+
+  template<typename T>
+  inline
+  cl::Kernel CLCV<T>::create_unbitmap(const cl::Buffer & image_in, const cl::Buffer & image_out,
+                                      const cl_int nrows, const cl_int ncols)
+  {
+    cl::Kernel kernel(m_program, "unbitmap");
+    kernel.setArg(0, image_in);
+    kernel.setArg(1, image_out);
+    return kernel;    
+  }
+  
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_unbitmap()
+  {
+    const int size = get_image().nrows * get_image().ncols;
+    if (get_device_type() == CL_DEVICE_TYPE_CPU)
+      assert(size % 32 == 0);
+    else
+      assert(size % (32*64) == 0);
+
+    const cl::NDRange unit_range(1);
+    const cl::NDRange parallel_range(64);
+    const cl::NDRange g_size(size / 32);
+    
+    const cl::NDRange & l_size =
+    get_device_type() == CL_DEVICE_TYPE_CPU ? unit_range : parallel_range;
+    
+    cl::Kernel kernel = create_unbitmap(get_in_buffer(), get_out_buffer(),
+                                        get_nrows(), get_ncols());
+    swap_buffers();
+    cl::Event event;
+    m_queue.enqueueNDRangeKernel(kernel, cl::NullRange, g_size, l_size, NULL, &event);
+    return event;
+  }
   
   template<typename T>
   inline
@@ -314,15 +389,12 @@ namespace clcv
   
   template<typename T>
   inline
-  cl::Event CLCV<T>::push_binarize(const cl_int threshold, const cl_int min, const cl_int max,
-                                   const cl::NDRange * local_work_size,
-                                   const cl::NDRange * global_work_size)
+  cl::Event CLCV<T>::push_binarize(const cl_int threshold, const cl_int min, const cl_int max)
   {
-    const cl::NDRange unit_range(1,1);
-    const cl::NDRange & l_size =
-      get_device_type() == CL_DEVICE_TYPE_CPU ? unit_range :
-      local_work_size ? *local_work_size : cl::NullRange;
-    const cl::NDRange & g_size = global_work_size ? *global_work_size : get_image().global_work_size;
+    const cl::NDRange & l_size = get_local_work_size();
+    const cl::NDRange & g_size = get_global_work_size().dimensions() == 0 ?
+      get_image().global_work_size
+    : get_global_work_size();
 
     cl::Kernel kernel = create_binarize(get_in_buffer(), get_out_buffer(),
                                         get_nrows(), get_ncols(),
@@ -333,6 +405,51 @@ namespace clcv
     return event;
   }
 
+  template<typename T>
+  inline
+  cl::Kernel CLCV<T>::create_bitmappedbinarize(const cl::Buffer & image_in, const cl::Buffer & image_out,
+                                               const cl_int nrows, const cl_int ncols,
+                                               const cl_int threshold, const bool inverted)
+  {
+    const int nb_threads = get_device_type() == CL_DEVICE_TYPE_CPU ? 1 : 64;
+    assert((nrows*ncols) % (32*nb_threads) == 0);
+
+    cl::Kernel kernel(m_program, "bitmappedbinarize");
+    kernel.setArg(0, image_in);
+    kernel.setArg(1, image_out);
+    kernel.setArg(2, threshold);
+    kernel.setArg(3, inverted ? 1 : 0);
+    kernel.setArg(4, inverted ? 0 : 1);
+    kernel.setArg(5, 32 * nb_threads * sizeof (cl_int), NULL);
+    return kernel;
+  }
+
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedbinarize(const cl_int threshold, const bool inverted)
+  {
+    const int size = get_image().nrows * get_image().ncols;
+    if (get_device_type() == CL_DEVICE_TYPE_CPU)
+      assert(size % 32 == 0);
+    else
+      assert(size % (32*64) == 0);
+
+    const cl::NDRange unit_range(1);
+    const cl::NDRange parallel_range(64);
+    const cl::NDRange g_size(size / 32);
+
+    const cl::NDRange & l_size =
+    get_device_type() == CL_DEVICE_TYPE_CPU ? unit_range : parallel_range;
+    
+    cl::Kernel kernel = create_bitmappedbinarize(get_in_buffer(), get_out_buffer(),
+                                                 get_nrows(), get_ncols(),
+                                                 threshold, inverted);
+    swap_buffers();
+    cl::Event event;
+    m_queue.enqueueNDRangeKernel(kernel, cl::NullRange, g_size, l_size, NULL, &event);
+    return event;
+  }
+  
   template<typename T>
   inline
   cl::Kernel CLCV<T>::create_naivemorph(const cl::Buffer & image_in,
@@ -363,13 +480,12 @@ namespace clcv
 
   template<typename T>
   inline
-  cl::Event CLCV<T>::push_naivemorph(const clcv_se_id se_id, const cl_int se_targetsum,
-                                     const cl::NDRange & local_work_size,
-                                     const cl::NDRange * global_work_size)
+  cl::Event CLCV<T>::push_naivemorph(const clcv_se_id se_id, const cl_int se_targetsum)
   {
-    const cl::NDRange unit_range(1,1);
-    const cl::NDRange & l_size = get_device_type() == CL_DEVICE_TYPE_CPU ? unit_range : local_work_size;
-    const cl::NDRange & g_size = global_work_size ? *global_work_size : get_image().global_work_size;
+    const cl::NDRange & l_size = get_local_work_size();
+    const cl::NDRange & g_size = get_global_work_size().dimensions() == 0 ?
+    get_image().global_work_size
+    : get_global_work_size();
 
     cl::Kernel kernel = create_naivemorph(get_in_buffer(), get_out_buffer(),
                                           get_nrows(), get_ncols(),
@@ -398,15 +514,12 @@ namespace clcv
 
   template<typename T>
   inline
-  cl::Event CLCV<T>::push_naivedilation(const clcv_se_id se_id,
-                               const cl::NDRange & local_work_size,
-                               const cl::NDRange * global_work_size)
+  cl::Event CLCV<T>::push_naivedilation(const clcv_se_id se_id)
   {
     clcv_se & se = get_se(se_id);
     cl_int se_nonzero = se.se_nonzero;
 
-    return push_naivemorph(se_id, -se_nonzero+1,
-                           local_work_size, global_work_size);
+    return push_naivemorph(se_id, -se_nonzero+1);
   }
 
   template<typename T>
@@ -426,34 +539,28 @@ namespace clcv
   
   template<typename T>
   inline
-  cl::Event CLCV<T>::push_naiveerosion(const clcv_se_id se_id,
-                                       const cl::NDRange & local_work_size,
-                                       const cl::NDRange * global_work_size)
+  cl::Event CLCV<T>::push_naiveerosion(const clcv_se_id se_id)
   {
     clcv_se & se = get_se(se_id);
     cl_int se_nonzero = se.se_nonzero;
     
-    return push_naivemorph(se_id, se_nonzero, local_work_size, global_work_size);
+    return push_naivemorph(se_id, se_nonzero);
   }
 
   template<typename T>
   inline
-  cl::Event CLCV<T>::push_naiveopening(const clcv_se_id se_id,
-                                       const cl::NDRange & local_work_size,
-                                       const cl::NDRange * global_work_size)
+  cl::Event CLCV<T>::push_naiveopening(const clcv_se_id se_id)
   {
-    push_naiveerosion(se_id, local_work_size, global_work_size);
-    return push_naivedilation(se_id, local_work_size, global_work_size);
+    push_naiveerosion(se_id);
+    return push_naivedilation(se_id);
   }
   
   template<typename T>
   inline
-  cl::Event CLCV<T>::push_naiveclosing(const clcv_se_id se_id,
-                              const cl::NDRange & local_work_size,
-                              const cl::NDRange * global_work_size)
+  cl::Event CLCV<T>::push_naiveclosing(const clcv_se_id se_id)
   {
-    push_naivedilation(se_id, local_work_size, global_work_size);
-    return push_naiveerosion(se_id, local_work_size, global_work_size);
+    push_naivedilation(se_id);
+    return push_naiveerosion(se_id);
   }
 
 }

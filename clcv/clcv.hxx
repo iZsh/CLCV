@@ -418,7 +418,7 @@ namespace clcv
     const int nb_threads = get_device_type() == CL_DEVICE_TYPE_CPU ? 1 : 64;
     assert((nrows*ncols) % (32*nb_threads) == 0);
 
-    cl::Kernel kernel(m_program, "bitmappedbinarize");
+    cl::Kernel kernel(m_program, "bitmapped_binarize");
     kernel.setArg(0, image_in);
     kernel.setArg(1, image_out);
     kernel.setArg(2, threshold);
@@ -464,7 +464,7 @@ namespace clcv
   {
     clcv_se & se = get_se(se_id);
     
-    cl::Kernel kernel(m_program, "naivemorph");
+    cl::Kernel kernel(m_program, "naive_morph");
     kernel.setArg(0, image_in);
     kernel.setArg(1, image_out);
     kernel.setArg(2, nrows);
@@ -475,8 +475,8 @@ namespace clcv
     kernel.setArg(7, se.se_nonzero);
     kernel.setArg(8, se_targetsum);
     kernel.setArg(9, se.buffer_size, NULL);
-    cl_int local_size = (((const size_t*)local_work_size)[0] + se.colrad*2)
-      * (((const size_t*)local_work_size)[1] + se.rowrad*2) * sizeof (T);
+    cl_int local_size = (xdim(local_work_size) + se.colrad*2)
+      * (ydim(local_work_size) + se.rowrad*2) * sizeof (T);
     kernel.setArg(10, local_size, NULL);
     
     return kernel;
@@ -567,6 +567,233 @@ namespace clcv
     return push_naiveerosion(se_id);
   }
 
+  template<typename T>
+  inline
+  cl::Kernel CLCV<T>::create_bitmappedmorph_dilation_h(const cl::Buffer & image_in,
+                                                       const cl::Buffer & image_out,
+                                                       const cl_int nrows, const cl_int ncols,
+                                                       const cl_int se_colrad,
+                                                       const cl::NDRange & local_work_size)
+  {
+    assert(se_colrad <= 32);
+    assert(ncols % 32 == 0);
+
+    cl::Kernel kernel(m_program, "bitmapped_dilation_h");
+    kernel.setArg(0, image_in);
+    kernel.setArg(1, image_out);
+    kernel.setArg(2, nrows);
+    kernel.setArg(3, ncols);
+    kernel.setArg(4, se_colrad);
+    cl_int local_size = (xdim(local_work_size) + 16*2)
+    * ydim(local_work_size) * sizeof (T);
+    kernel.setArg(5, local_size, NULL);
+    return kernel;
+  }
+
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_dilation_h(const cl_int se_colrad)
+  {
+    assert(get_image().ncols % 32 == 0);
+    const unsigned ncols_round = round(get_ncols()/32, 32);
+    const cl::NDRange b_size(ncols_round, get_nrows());
+
+    const cl::NDRange & l_size = get_local_work_size();
+    const cl::NDRange & g_size = get_global_work_size().dimensions() == 0 ?
+    b_size : get_global_work_size();
+
+    cl::Kernel kernel = create_bitmappedmorph_dilation_h(get_in_buffer(), get_out_buffer(),
+                                                         get_nrows(), get_ncols(),
+                                                         se_colrad, l_size);
+    swap_buffers();
+    cl::Event event;    
+    m_queue.enqueueNDRangeKernel(kernel, cl::NullRange, g_size, l_size, NULL, &event);
+    return event;    
+  }
+
+  template<typename T>
+  inline
+  cl::Kernel CLCV<T>::create_bitmappedmorph_dilation_v(const cl::Buffer & image_in,
+                                                       const cl::Buffer & image_out,
+                                                       const cl_int nrows, const cl_int ncols,
+                                                       const cl_int se_rowrad,
+                                                       const cl::NDRange & local_work_size)
+  {
+    assert(ncols % 32 == 0);
+    
+    cl::Kernel kernel(m_program, "bitmapped_dilation_v");
+    kernel.setArg(0, image_in);
+    kernel.setArg(1, image_out);
+    kernel.setArg(2, nrows);
+    kernel.setArg(3, ncols);
+    kernel.setArg(4, se_rowrad);
+    cl_int local_size = xdim(local_work_size)
+    * (ydim(local_work_size) + se_rowrad*2) * sizeof (T);
+    kernel.setArg(5, local_size, NULL);
+    return kernel;
+  }
+  
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_dilation_v(const cl_int se_rowrad)
+  {
+    assert(get_image().ncols % 32 == 0);
+    const unsigned ncols_round = round(get_ncols()/32, 32);
+    const cl::NDRange b_size(ncols_round, get_nrows());
+
+    const cl::NDRange & l_size = get_local_work_size();
+    const cl::NDRange & g_size = get_global_work_size().dimensions() == 0 ?
+    b_size : get_global_work_size();
+    
+    cl::Kernel kernel = create_bitmappedmorph_dilation_v(get_in_buffer(), get_out_buffer(),
+                                                           get_nrows(), get_ncols(),
+                                                           se_rowrad, l_size);
+    swap_buffers();
+    cl::Event event;
+    m_queue.enqueueNDRangeKernel(kernel, cl::NullRange, g_size, l_size, NULL, &event);
+    return event;
+  }
+  
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_dilation(const cl_int se_rowrad, const cl_int se_colrad)
+  { // FIXME : return an event for the whole operation, otherwise the timing won't make sense
+    push_bitmappedmorph_dilation_h(se_colrad);
+    return push_bitmappedmorph_dilation_v(se_rowrad);
+  }
+
+  template<typename T>
+  inline
+  cl::Kernel CLCV<T>::create_bitmappedmorph_erosion_h(const cl::Buffer & image_in,
+                                                      const cl::Buffer & image_out,
+                                                      const cl_int nrows, const cl_int ncols,
+                                                      const cl_int se_colrad,
+                                                      const cl::NDRange & local_work_size)
+  {
+    assert(se_colrad <= 32);
+    assert(ncols % 32 == 0);
+    
+    cl::Kernel kernel(m_program, "bitmapped_erosion_h");
+    kernel.setArg(0, image_in);
+    kernel.setArg(1, image_out);
+    kernel.setArg(2, nrows);
+    kernel.setArg(3, ncols);
+    kernel.setArg(4, se_colrad);
+    cl_int local_size = (xdim(local_work_size) + 16*2)
+    * ydim(local_work_size) * sizeof (T);
+    kernel.setArg(5, local_size, NULL);
+    return kernel;
+  }
+  
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_erosion_h(const cl_int se_colrad)
+  {
+    assert(get_image().ncols % 32 == 0);
+    const unsigned ncols_round = round(get_ncols()/32, 32);
+    const cl::NDRange b_size(ncols_round, get_nrows());
+    
+    const cl::NDRange & l_size = get_local_work_size();
+    const cl::NDRange & g_size = get_global_work_size().dimensions() == 0 ?
+    b_size : get_global_work_size();
+    
+    cl::Kernel kernel = create_bitmappedmorph_erosion_h(get_in_buffer(), get_out_buffer(),
+                                                        get_nrows(), get_ncols(),
+                                                        se_colrad, l_size);
+    swap_buffers();
+    cl::Event event;    
+    m_queue.enqueueNDRangeKernel(kernel, cl::NullRange, g_size, l_size, NULL, &event);
+    return event;    
+  }
+  
+  template<typename T>
+  inline
+  cl::Kernel CLCV<T>::create_bitmappedmorph_erosion_v(const cl::Buffer & image_in,
+                                                      const cl::Buffer & image_out,
+                                                      const cl_int nrows, const cl_int ncols,
+                                                      const cl_int se_rowrad,
+                                                      const cl::NDRange & local_work_size)
+  {
+    assert(ncols % 32 == 0);
+    
+    cl::Kernel kernel(m_program, "bitmapped_erosion_v");
+    kernel.setArg(0, image_in);
+    kernel.setArg(1, image_out);
+    kernel.setArg(2, nrows);
+    kernel.setArg(3, ncols);
+    kernel.setArg(4, se_rowrad);
+    cl_int local_size = xdim(local_work_size)
+    * (ydim(local_work_size) + se_rowrad*2) * sizeof (T);
+    kernel.setArg(5, local_size, NULL);
+    return kernel;
+  }
+  
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_erosion_v(const cl_int se_rowrad)
+  {
+    assert(get_image().ncols % 32 == 0);
+    const unsigned ncols_round = round(get_ncols()/32, 32);
+    const cl::NDRange b_size(ncols_round, get_nrows());
+    
+    const cl::NDRange & l_size = get_local_work_size();
+    const cl::NDRange & g_size = get_global_work_size().dimensions() == 0 ?
+    b_size : get_global_work_size();
+    
+    cl::Kernel kernel = create_bitmappedmorph_erosion_v(get_in_buffer(), get_out_buffer(),
+                                                        get_nrows(), get_ncols(),
+                                                        se_rowrad, l_size);
+    swap_buffers();
+    cl::Event event;
+    m_queue.enqueueNDRangeKernel(kernel, cl::NullRange, g_size, l_size, NULL, &event);
+    return event;
+  }
+
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_erosion(const cl_int se_rowrad, const cl_int se_colrad)
+  { // FIXME : return an event for the whole operation, otherwise the timing won't make sense
+    push_bitmappedmorph_erosion_h(se_colrad);
+    return push_bitmappedmorph_erosion_v(se_rowrad);
+  }  
+
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_opening(const cl_int se_rowrad, const cl_int se_colrad)
+  { // FIXME : return an event for the whole operation, otherwise the timing won't make sense
+    push_bitmappedmorph_erosion(se_rowrad, se_colrad);
+    return push_bitmappedmorph_dilation(se_rowrad, se_colrad);
+  }  
+
+  template<typename T>
+  inline
+  cl::Event CLCV<T>::push_bitmappedmorph_closing(const cl_int se_rowrad, const cl_int se_colrad)
+  { // FIXME : return an event for the whole operation, otherwise the timing won't make sense
+    push_bitmappedmorph_dilation(se_rowrad, se_colrad);
+    return push_bitmappedmorph_erosion(se_rowrad, se_colrad);
+  }  
+  
+  template<typename T>
+  inline
+  int CLCV<T>::round(int v, int r)
+  {
+    return ((v-1)/r + 1) * r;
+  }
+  
+  template<typename T>
+  inline
+  size_t CLCV<T>::xdim(const cl::NDRange & ndrange)
+  {
+    return ((const size_t*)ndrange)[0];
+  }
+
+  template<typename T>
+  inline
+  size_t CLCV<T>::ydim(const cl::NDRange & ndrange)
+  {
+    return ((const size_t*)ndrange)[1];
+  }
+  
 }
 
 #endif

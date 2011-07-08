@@ -100,6 +100,42 @@ namespace clcv
     cl::Event push_naiveerosion(const clcv_se_id se_id);
     cl::Event push_naiveopening(const clcv_se_id se_id);
     cl::Event push_naiveclosing(const clcv_se_id se_id);
+    
+    // Bitmapped implementation
+    cl::Kernel create_bitmappedmorph_dilation_h(const cl::Buffer & image_in,
+                                                const cl::Buffer & image_out,
+                                                const cl_int nrows, const cl_int ncols,
+                                                const cl_int se_colrad,
+                                                const cl::NDRange & local_work_size);
+    cl::Event push_bitmappedmorph_dilation_h(const cl_int se_colrad);
+
+    cl::Kernel create_bitmappedmorph_dilation_v(const cl::Buffer & image_in,
+                                                  const cl::Buffer & image_out,
+                                                  const cl_int nrows, const cl_int ncols,
+                                                  const cl_int se_rowrad,
+                                                  const cl::NDRange & local_work_size);
+    cl::Event push_bitmappedmorph_dilation_v(const cl_int se_rowrad);
+
+    cl::Event push_bitmappedmorph_dilation(const cl_int se_rowrad, const cl_int se_colrad);
+    
+    cl::Kernel create_bitmappedmorph_erosion_h(const cl::Buffer & image_in,
+                                               const cl::Buffer & image_out,
+                                               const cl_int nrows, const cl_int ncols,
+                                               const cl_int se_colrad,
+                                               const cl::NDRange & local_work_size);
+    cl::Event push_bitmappedmorph_erosion_h(const cl_int se_colrad);
+    
+    cl::Kernel create_bitmappedmorph_erosion_v(const cl::Buffer & image_in,
+                                               const cl::Buffer & image_out,
+                                               const cl_int nrows, const cl_int ncols,
+                                               const cl_int se_rowrad,
+                                               const cl::NDRange & local_work_size);
+    cl::Event push_bitmappedmorph_erosion_v(const cl_int se_rowrad);
+
+    cl::Event push_bitmappedmorph_erosion(const cl_int se_rowrad, const cl_int se_colrad);
+
+    cl::Event push_bitmappedmorph_opening(const cl_int se_rowrad, const cl_int se_colrad);
+    cl::Event push_bitmappedmorph_closing(const cl_int se_rowrad, const cl_int se_colrad);
 
   private: struct clcv_image;
   private: struct clcv_se;
@@ -117,6 +153,11 @@ namespace clcv
     cl::Buffer & get_out_buffer(clcv_image_id image_id);
     void swap_buffers(clcv_image_id image_id);
     void swap_buffers();
+    
+    // Utilities
+    static int round(int v, int r);
+    static size_t xdim(const cl::NDRange & ndrange);
+    static size_t ydim(const cl::NDRange & ndrange);
 
   private:
     CLCV(const CLCV &);
